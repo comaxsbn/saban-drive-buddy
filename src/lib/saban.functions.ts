@@ -116,10 +116,13 @@ export const askNoa = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const { chatWithNoa, readRange } = await import("./saban.server");
     const { SHEETS, ORDERS_TAB, NOTES_TAB } = await import("./saban-config");
-    const [orders, notes] = await Promise.all([
-      readRange(SHEETS.orders, `${ORDERS_TAB}!A2:H40`),
-      readRange(SHEETS.notes, `${NOTES_TAB}!A2:S60`),
+    // Same ranges as getOrders/getNotes so the server cache is shared (Sheets read quota).
+    const [allOrders, allNotes] = await Promise.all([
+      readRange(SHEETS.orders, `${ORDERS_TAB}!A2:H`),
+      readRange(SHEETS.notes, `${NOTES_TAB}!A2:S`),
     ]);
+    const orders = allOrders.slice(-40);
+    const notes = allNotes.slice(-60);
     const context = [
       "### הזמנות אחרונות (תאריך | מספר | לקוח | מחסן | כתובת | פריטים | פקדון בלות | פקדון משטחים)",
       ...orders.map((r) => r.join(" | ")),
