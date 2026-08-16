@@ -49,7 +49,7 @@ export interface NoteData {
 
 const SCRIPT_URL =
   import.meta.env.VITE_GAS_URL ||
-  "https://script.google.com/macros/s/AKfycbwJDwvb3wPYFoCEVCH_E9Mdco5w_dZeh35KNtCJB8_GdSllt59vV10oWgEA-QaH4S5A/exec";
+  "https://script.google.com/macros/s/AKfycbxaP0WMAEJZu7PkHWFnVFLKfgbgeimbrHQBQ6FYNsqTgsAHCOtw5c555dIqUysnbQFUJw/exec";
 
 /**
  * קריאת GET ל-Google Apps Script.
