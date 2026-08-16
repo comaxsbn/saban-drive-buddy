@@ -2,7 +2,7 @@
  * ============================================================================
  * Saban-Drive-Buddy / SabanOS Enterprise Core Server Engine
  * File: src/lib/saban.server.ts
- * Description: Zero-Dependency High-Performance Google Sheets & Drive Bridge
+ * Description: SSR-Safe Zero-Dependency Google Sheets & Drive Bridge
  * ============================================================================
  */
 
@@ -42,7 +42,6 @@ export class SabanServerCore {
   private static instance: SabanServerCore;
 
   private config: SabanServerConfig = {
-    // ה-Web App URL החי של סבן
     gasUrl:
       (typeof process !== 'undefined' && (process.env.VITE_GAS_URL || process.env.VITE_GAS_URL_GEMINI)) ||
       'https://script.google.com/macros/s/AKfycbzzomapy62uLXtkN7oS0Dg9XUUPcCJ1fOxbkRN7ftI1n30IN95a0xwB_wtyupCmb8_2Ig/exec',
@@ -53,10 +52,10 @@ export class SabanServerCore {
       (typeof process !== 'undefined' && process.env.SABAN_DRIVE_FOLDER_ID) ||
       '1JCxbchEs3hznBCuXMpfTCzbMO7Ncgiuz',
     cacheTtlMs: 30_000,
-    batchFlushIntervalMs: 800,
+    batchFlushIntervalMs: 1200,
     maxBatchSize: 50,
-    maxRetries: 3,
-    baseRetryDelayMs: 1000,
+    maxRetries: 2,
+    baseRetryDelayMs: 600,
   };
 
   private cache = new Map<string, { data: any; expiresAt: number }>();
@@ -64,9 +63,7 @@ export class SabanServerCore {
   private isFlushingQueue = false;
   private flushTimer: any = null;
 
-  private constructor() {
-    this.startBatchFlusher();
-  }
+  private constructor() {}
 
   public static getInstance(): SabanServerCore {
     if (!SabanServerCore.instance) {
@@ -75,26 +72,25 @@ export class SabanServerCore {
     return SabanServerCore.instance;
   }
 
-  private async executeWithRetry<T>(fn: () => Promise<T>, context: string): Promise<T> {
-    let attempt = 0;
-    while (attempt < this.config.maxRetries) {
-      try {
-        return await fn();
-      } catch (error: any) {
-        attempt++;
-        if (attempt < this.config.maxRetries) {
-          const delay = Math.pow(2, attempt) * this.config.baseRetryDelayMs + Math.random() * 200;
-          console.warn(`⏳ [Retry in ${context}] Attempt ${attempt}/${this.config.maxRetries} after ${Math.round(delay)}ms...`);
-          await new Promise((res) => setTimeout(res, delay));
-        } else {
-          console.error(`❌ Request failed in ${context}:`, error);
-          throw error;
-        }
+  /**
+   * פענוח בטוח של JSON שאינו זורק שגיאות ב-SSR
+   */
+  private async safeParseJson(res: Response): Promise<any> {
+    try {
+      const text = await res.text();
+      if (!text || text.trim().startsWith('<')) {
+        // התקבל HTML של שגיאה או הפניה מגוגל
+        return null;
       }
+      return JSON.parse(text);
+    } catch (e) {
+      return null;
     }
-    throw new Error(`Failed after ${this.config.maxRetries} retries in ${context}`);
   }
 
+  /**
+   * שליפת נתונים מוגנת מ-Sheets (לעולם לא קורסת)
+   */
   public async getSheetValues(sheetName: string, range?: string, forceFresh = false): Promise<any[][]> {
     const cacheKey = `read_${sheetName}_${range || 'all'}`;
     const cached = this.cache.get(cacheKey);
@@ -105,36 +101,49 @@ export class SabanServerCore {
     }
 
     try {
-      const data = await this.executeWithRetry(async () => {
-        const url = `${this.config.gasUrl}?action=readSheet&sheet=${encodeURIComponent(sheetName)}${
-          range ? `&range=${encodeURIComponent(range)}` : ''
-        }`;
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timeoutId = controller ? setTimeout(() => controller.abort(), 6000) : null;
 
-        const res = await fetch(url, {
-          method: 'GET',
-          headers: { 'Accept': 'application/json' },
-        });
+      const url = `${this.config.gasUrl}?action=readSheet&sheet=${encodeURIComponent(sheetName)}${
+        range ? `&range=${encodeURIComponent(range)}` : ''
+      }`;
 
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status} fetching ${sheetName}`);
-        }
-
-        const json = await res.json();
-        return Array.isArray(json) ? json : json.data || [];
-      }, `getSheetValues(${sheetName})`);
-
-      this.cache.set(cacheKey, {
-        data,
-        expiresAt: now + this.config.cacheTtlMs,
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal: controller ? controller.signal : undefined,
       });
 
-      return data;
+      if (timeoutId) clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        return cached ? cached.data : [];
+      }
+
+      const json = await this.safeParseJson(res);
+      if (!json) {
+        return cached ? cached.data : [];
+      }
+
+      const data = Array.isArray(json) ? json : json.data || [];
+      if (Array.isArray(data) && data.length > 0) {
+        this.cache.set(cacheKey, {
+          data,
+          expiresAt: now + this.config.cacheTtlMs,
+        });
+        return data;
+      }
+
+      return cached ? cached.data : [];
     } catch (err) {
-      if (cached) return cached.data;
-      return [];
+      // במקרה של שגיאת רשת/timeout - החזר מערך ריק או cache במקום לקרוס
+      return cached ? cached.data : [];
     }
   }
 
+  /**
+   * הוספת שורה לתור הכתיבה
+   */
   public appendRowQueued(sheetName: string, rowValues: any[]): Promise<any> {
     return new Promise((resolve, reject) => {
       this.writeQueue.push({
@@ -148,13 +157,13 @@ export class SabanServerCore {
       });
 
       this.invalidateCache(sheetName);
-
-      if (this.writeQueue.length >= this.config.maxBatchSize) {
-        this.flushQueue();
-      }
+      this.ensureFlusherActive();
     });
   }
 
+  /**
+   * עדכון שורה לפי מזהה
+   */
   public updateRowByIdentifierQueued(
     sheetName: string,
     idColumnName: string,
@@ -172,7 +181,6 @@ export class SabanServerCore {
 
       if (existingIdx !== -1) {
         this.writeQueue[existingIdx].values = [updatedRowValues];
-        this.writeQueue[existingIdx].timestamp = Date.now();
         resolve({ coalesced: true });
         return;
       }
@@ -189,6 +197,7 @@ export class SabanServerCore {
       });
 
       this.invalidateCache(sheetName);
+      this.ensureFlusherActive();
     });
   }
 
@@ -202,37 +211,35 @@ export class SabanServerCore {
     }
 
     try {
-      const files = await this.executeWithRetry(async () => {
-        const url = `${this.config.gasUrl}?action=listFiles&folderId=${encodeURIComponent(targetFolder)}`;
-        const res = await fetch(url, {
-          method: 'GET',
-          headers: { 'Accept': 'application/json' },
-        });
-
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = await res.json();
-        return Array.isArray(json) ? json : json.files || [];
-      }, `listDriveFiles`);
-
-      this.cache.set(cacheKey, {
-        data: files,
-        expiresAt: Date.now() + this.config.cacheTtlMs,
+      const url = `${this.config.gasUrl}?action=listFiles&folderId=${encodeURIComponent(targetFolder)}`;
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
       });
 
-      return files;
+      const json = await this.safeParseJson(res);
+      const files = json && (Array.isArray(json) ? json : json.files || []);
+
+      if (Array.isArray(files)) {
+        this.cache.set(cacheKey, {
+          data: files,
+          expiresAt: Date.now() + this.config.cacheTtlMs,
+        });
+        return files;
+      }
+      return cached ? cached.data : [];
     } catch (err) {
-      if (cached) return cached.data;
-      return [];
+      return cached ? cached.data : [];
     }
   }
 
-  private startBatchFlusher(): void {
-    if (this.flushTimer) clearInterval(this.flushTimer);
-    this.flushTimer = setInterval(() => {
-      if (this.writeQueue.length > 0 && !this.isFlushingQueue) {
+  private ensureFlusherActive(): void {
+    if (!this.flushTimer) {
+      this.flushTimer = setTimeout(() => {
+        this.flushTimer = null;
         this.flushQueue();
-      }
-    }, this.config.batchFlushIntervalMs);
+      }, this.config.batchFlushIntervalMs);
+    }
   }
 
   private async flushQueue(): Promise<void> {
@@ -253,21 +260,21 @@ export class SabanServerCore {
         })),
       };
 
-      await this.executeWithRetry(async () => {
-        await fetch(this.config.gasUrl, {
-          method: 'POST',
-          mode: 'no-cors',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify(payload),
-        });
-      }, 'flushBatchQueue');
+      await fetch(this.config.gasUrl, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify(payload),
+      });
 
       operations.forEach((op) => op.resolve({ success: true, count: op.values.length }));
     } catch (error) {
-      console.error('❌ Flush error:', error);
-      operations.forEach((op) => op.reject(error));
+      operations.forEach((op) => op.resolve({ success: false, error }));
     } finally {
       this.isFlushingQueue = false;
+      if (this.writeQueue.length > 0) {
+        this.ensureFlusherActive();
+      }
     }
   }
 
