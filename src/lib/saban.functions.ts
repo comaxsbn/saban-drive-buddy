@@ -2,7 +2,7 @@
  * ============================================================================
  * Saban-Drive-Buddy / SabanOS Business Functions & Named Exports
  * File: src/lib/saban.functions.ts
- * Description: Complete Production-Ready Exports for TanStack Start / Vite / Netlify
+ * Description: Client & Server Safe Operational Functions for TanStack / Vite
  * ============================================================================
  */
 
@@ -109,9 +109,6 @@ export interface Reminder {
 // 1. שירותי הזמנות (Orders Named Exports)
 // ============================================================================
 
-/**
- * שליפת הזמנות מהגיליון
- */
 export async function getOrders(forceFresh = false): Promise<Order[]> {
   const raw = await sabanServer.getSheetValues(SABAN_SHEET_NAMES.ORDERS_LOG, undefined, forceFresh);
   if (!raw || raw.length <= 1) return [];
@@ -140,9 +137,6 @@ export async function getOrders(forceFresh = false): Promise<Order[]> {
   }));
 }
 
-/**
- * יצירת הזמנה חדשה
- */
 export async function createOrder(orderData: Partial<Order>): Promise<Order> {
   const orderNumber = orderData.orderNumber || `ORD-${Date.now().toString().slice(-6)}`;
   const dateTime = orderData.dateTime || new Date().toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });
@@ -195,9 +189,6 @@ export async function createOrder(orderData: Partial<Order>): Promise<Order> {
   return newOrder;
 }
 
-/**
- * עדכון פרטי הזמנה קיימת
- */
 export async function updateOrder(orderNumber: string, updates: Partial<Order>): Promise<void> {
   const all = await getOrders();
   const existing = all.find((o) => o.orderNumber === String(orderNumber).trim());
@@ -232,9 +223,6 @@ export async function updateOrder(orderNumber: string, updates: Partial<Order>):
   );
 }
 
-/**
- * חיפוש הזמנות
- */
 export async function searchOrders(searchTerm: string): Promise<Order[]> {
   const all = await getOrders();
   const term = searchTerm.toLowerCase().trim();
@@ -252,9 +240,6 @@ export async function searchOrders(searchTerm: string): Promise<Order[]> {
 // 2. שירותי תעודות משלוח (Delivery Notes Named Exports)
 // ============================================================================
 
-/**
- * שליפת תעודות משלוח
- */
 export async function getNotes(forceFresh = false): Promise<DeliveryNote[]> {
   const raw = await sabanServer.getSheetValues(SABAN_SHEET_NAMES.DELIVERY_NOTES, undefined, forceFresh);
   if (!raw || raw.length <= 1) return [];
@@ -275,9 +260,6 @@ export async function getNotes(forceFresh = false): Promise<DeliveryNote[]> {
   }));
 }
 
-/**
- * עדכון סטטוס תעודת משלוח
- */
 export async function updateNoteStatus(
   noteNumber: string,
   newStatus: string,
@@ -317,9 +299,6 @@ export async function updateNoteStatus(
 // 3. שירותי Google Drive (Drive Named Exports)
 // ============================================================================
 
-/**
- * קבלת רשימת קבצים מתיקיית הדרייב
- */
 export async function getDriveFiles(folderId?: string): Promise<DriveFileItem[]> {
   return await sabanServer.listDriveFiles(folderId);
 }
@@ -479,13 +458,12 @@ export async function deleteReminder(id: string): Promise<{ success: boolean }> 
 }
 
 // ============================================================================
-// 7. מנוע נועה AI (Noa Chat Engine - עבור src/components/NoaChat.tsx)
+// 7. מנוע נועה AI (Noa Chat Engine - עבור NoaChat.tsx)
 // ============================================================================
 
 export const noaSystemInstruction = `
 את "נועה" (Noa) - מנהלת הלוגיסטיקה והמשימות החכמה של ח. סבן חומרי בניין.
 את פועלת בסגנון מקצועי, חד, ענייני ותומך.
-תפקידך לתאם סידורי עבודה, לפקח על אספקות מחסני החרש והתלמיד, לבדוק מלאי והצלבות תעודות משלוח מול הזמנות קומקס.
 `;
 
 const sanitizeForVoice = (text: string): string => {
@@ -497,20 +475,14 @@ const sanitizeForVoice = (text: string): string => {
     .trim();
 };
 
-/**
- * פונקציית השיחה הראשית עם נועה AI (עבור NoaChat.tsx)
- */
 export async function askNoa(
   message: string,
   history: any[] = [],
   userKey?: string
 ): Promise<{ text: string; audioContent?: string; candidates?: any[] }> {
   const gasUrl =
-    (typeof process !== 'undefined' && process.env?.VITE_GAS_URL_AI) ||
-    (typeof process !== 'undefined' && process.env?.VITE_GAS_URL) ||
-    '';
+    (typeof process !== 'undefined' && (process.env?.VITE_GAS_URL_AI || process.env?.VITE_GAS_URL)) || '';
 
-  // אם הוגדר צינור GAS חיצוני
   if (gasUrl) {
     try {
       const res = await fetch(gasUrl, {
@@ -530,13 +502,11 @@ export async function askNoa(
         audioContent: sanitizeForVoice(textResponse),
       };
     } catch (err) {
-      console.warn('GAS proxy request failed, falling back to local dispatch response:', err);
+      console.warn('GAS proxy error:', err);
     }
   }
 
-  // מענה לוגיסטי מהיר מקומי אם ה-GAS אינו זמין
   let fallbackReply = `ראמי נשמה, קיבלתי את ההודעה: "${message}".`;
-
   if (message.includes('סידור') || message.includes('הזמנות')) {
     const orders = await getOrders();
     fallbackReply = `ישנן כרגע ${orders.length} הזמנות פעילות בלוח התפעולי של סבן.`;
@@ -552,7 +522,7 @@ export async function askNoa(
 
 export async function predictOrderEta(order: Order, historicalOrders: Order[] = []): Promise<string | null> {
   const now = new Date();
-  now.setMinutes(now.getMinutes() + 45); // הערכת זמן בסיסית של 45 דק'
+  now.setMinutes(now.getMinutes() + 45);
   const hours = String(now.getHours()).padStart(2, '0');
   const minutes = String(now.getMinutes()).padStart(2, '0');
   return `${hours}:${minutes}`;
