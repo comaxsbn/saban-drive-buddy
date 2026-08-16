@@ -121,9 +121,11 @@ export async function listDrive(folderId: string, search?: string) {
     pageSize: "100",
     orderBy: "modifiedTime desc",
   });
-  const data = (await call("google_drive", `/drive/v3/files?${params.toString()}`)) as {
-    files?: unknown[];
-  };
+  const data = await cached(`drive:${params.toString()}`, async () => {
+    return (await call("google_drive", `/drive/v3/files?${params.toString()}`)) as {
+      files?: unknown[];
+    };
+  });
   const files = (data.files ?? []) as {
     id: string;
     name: string;
