@@ -1,12 +1,12 @@
 /**
  * ============================================================================
  * Saban-Drive-Buddy / SabanOS Enterprise Core Server Engine
- * File: saban.server.ts
- * Description: Production-Ready Resilient Google Sheets & Drive Infrastructure Layer
+ * File: src/lib/saban.server.ts
+ * Description: Production-Ready Google Sheets & Drive Resilient Server Infrastructure
  * ============================================================================
  */
 
-import { google, sheets_v4 } from 'googleapis';
+import { google, sheets_v4, drive_v3 } from 'googleapis';
 import { JWT } from 'google-auth-library';
 
 export interface SabanServerConfig {
@@ -24,8 +24,7 @@ export interface SabanServerConfig {
 export interface SheetWriteOperation {
   id: string;
   sheetName: string;
-  type: 'APPEND' | 'UPDATE_ROW' | 'CLEAR_AND_SET';
-  range?: string;
+  type: 'APPEND' | 'UPDATE_ROW';
   rowIdentifier?: { columnKey: string; value: string | number };
   values: any[][];
   resolve: (value: any) => void;
@@ -33,18 +32,20 @@ export interface SheetWriteOperation {
   timestamp: number;
 }
 
-export interface CacheEntry<T> {
-  data: T;
-  expiresAt: number;
-  isStale: boolean;
+export interface DriveFileItem {
+  id: string;
+  name: string;
+  mimeType: string;
+  webViewLink?: string;
+  thumbnailLink?: string;
+  createdTime?: string;
+  size?: string;
 }
 
-/**
- * מנהל חיבור ותשתית עמידה לעבודה מול Google Sheets & Drive
- */
 export class SabanServerCore {
   private static instance: SabanServerCore;
   private sheetsClient!: sheets_v4.Sheets;
+  private driveClient!: drive_v3.Drive;
   private authClient!: JWT;
   private isInitialized = false;
 
@@ -53,19 +54,17 @@ export class SabanServerCore {
     driveRootFolderId: process.env.SABAN_DRIVE_FOLDER_ID || '1JCxbchEs3hznBCuXMpfTCzbMO7Ncgiuz',
     clientEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '',
     privateKey: (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n'),
-    cacheTtlMs: 30_000, // 30 שניות TTL לקריאות
-    batchFlushIntervalMs: 800, // Flush כל 800 מ"ש לאיחוד כתיבות
+    cacheTtlMs: 30_000,
+    batchFlushIntervalMs: 800,
     maxBatchSize: 50,
     maxRetries: 4,
     baseRetryDelayMs: 1000,
   };
 
-  // In-Memory Storage
-  private cache = new Map<string, CacheEntry<any>>();
+  private cache = new Map<string, { data: any; expiresAt: number }>();
   private writeQueue: SheetWriteOperation[] = [];
   private isFlushingQueue = false;
-  private flushTimer: NodeJS.Timeout | null = null;
-  private sheetLocks = new Map<string, Promise<void>>();
+  private flushTimer: any = null;
 
   private constructor() {
     this.startBatchFlusher();
@@ -78,9 +77,6 @@ export class SabanServerCore {
     return SabanServerCore.instance;
   }
 
-  /**
-   * אתחול מאובטח של ה-Auth מול שרתי Google
-   */
   public async initialize(customConfig?: Partial<SabanServerConfig>): Promise<void> {
     if (this.isInitialized) return;
 
@@ -88,33 +84,26 @@ export class SabanServerCore {
       this.config = { ...this.config, ...customConfig };
     }
 
-    if (!this.config.clientEmail || !this.config.privateKey) {
-      // Fallback לסביבת פיתוח מקומית
-      console.warn('⚠️ Google Credentials not fully supplied. Using Application Default or Mock Auth.');
-    }
-
     try {
       this.authClient = new google.auth.JWT({
-        email: this.config.clientEmail,
-        key: this.config.privateKey,
+        email: this.config.clientEmail || undefined,
+        key: this.config.privateKey || undefined,
         scopes: [
           'https://www.googleapis.com/auth/spreadsheets',
-          'https://www.googleapis.com/auth/drive',
+          'https://www.googleapis.com/auth/drive.readonly',
+          'https://www.googleapis.com/auth/drive.file',
         ],
       });
 
       this.sheetsClient = google.sheets({ version: 'v4', auth: this.authClient });
+      this.driveClient = google.drive({ version: 'v3', auth: this.authClient });
       this.isInitialized = true;
-      console.log('✅ Saban Server Engine initialized successfully with Service Account.');
     } catch (error) {
       console.error('❌ Failed to initialize Saban Server Engine Auth:', error);
       throw error;
     }
   }
 
-  /**
-   * מנגנון נסיגה מעריכית לטיפול בשגיאות 429/503
-   */
   private async executeWithRetry<T>(fn: () => Promise<T>, context: string): Promise<T> {
     let attempt = 0;
     while (attempt < this.config.maxRetries) {
@@ -127,12 +116,10 @@ export class SabanServerCore {
         const isTransient = status >= 500 && status < 600;
 
         if ((isRateLimit || isTransient) && attempt < this.config.maxRetries) {
-          const jitter = Math.random() * 200;
-          const delay = Math.pow(2, attempt) * this.config.baseRetryDelayMs + jitter;
-          console.warn(`⏳ [RateLimit/Transient Error in ${context}] Retrying attempt ${attempt}/${this.config.maxRetries} after ${Math.round(delay)}ms...`);
+          const delay = Math.pow(2, attempt) * this.config.baseRetryDelayMs + Math.random() * 200;
+          console.warn(`⏳ [RateLimit in ${context}] Retrying (${attempt}/${this.config.maxRetries}) after ${Math.round(delay)}ms...`);
           await new Promise((res) => setTimeout(res, delay));
         } else {
-          console.error(`❌ Critical error executing ${context} after ${attempt} attempts:`, error);
           throw error;
         }
       }
@@ -140,9 +127,6 @@ export class SabanServerCore {
     throw new Error(`Execution failed after ${this.config.maxRetries} retries in ${context}`);
   }
 
-  /**
-   * קריאה חכמה מ-Sheets עם Cache ו-SWR
-   */
   public async getSheetValues(sheetName: string, range?: string, forceFresh = false): Promise<any[][]> {
     await this.initialize();
     const fullRange = range ? `${sheetName}!${range}` : `${sheetName}!A1:Z`;
@@ -155,36 +139,27 @@ export class SabanServerCore {
       return cached.data;
     }
 
-    const fetchPromise = this.executeWithRetry(async () => {
-      const res = await this.sheetsClient.spreadsheets.values.get({
-        spreadsheetId: this.config.spreadsheetId,
-        range: fullRange,
-        valueRenderOption: 'FORMATTED_VALUE',
-        dateTimeRenderOption: 'FORMATTED_STRING',
-      });
-      return res.data.values || [];
-    }, `getSheetValues(${fullRange})`);
-
     try {
-      const data = await fetchPromise;
+      const data = await this.executeWithRetry(async () => {
+        const res = await this.sheetsClient.spreadsheets.values.get({
+          spreadsheetId: this.config.spreadsheetId,
+          range: fullRange,
+          valueRenderOption: 'FORMATTED_VALUE',
+        });
+        return res.data.values || [];
+      }, `getSheetValues(${fullRange})`);
+
       this.cache.set(cacheKey, {
         data,
         expiresAt: now + this.config.cacheTtlMs,
-        isStale: false,
       });
       return data;
     } catch (err) {
-      if (cached) {
-        console.warn(`⚠️ Serving stale cache for ${fullRange} due to fetch error.`);
-        return cached.data;
-      }
+      if (cached) return cached.data;
       throw err;
     }
   }
 
-  /**
-   * הוספת שורה לתור הכתיבה המושהית (Write-Behind)
-   */
   public appendRowQueued(sheetName: string, rowValues: any[]): Promise<any> {
     return new Promise((resolve, reject) => {
       this.writeQueue.push({
@@ -197,7 +172,6 @@ export class SabanServerCore {
         timestamp: Date.now(),
       });
 
-      // ניקוי Cache של הטאב המתאים
       this.invalidateCache(sheetName);
 
       if (this.writeQueue.length >= this.config.maxBatchSize) {
@@ -206,9 +180,6 @@ export class SabanServerCore {
     });
   }
 
-  /**
-   * עדכון שורה לפי מזהה (למשל מספר הזמנה)
-   */
   public updateRowByIdentifierQueued(
     sheetName: string,
     idColumnName: string,
@@ -216,19 +187,18 @@ export class SabanServerCore {
     updatedRowValues: any[]
   ): Promise<any> {
     return new Promise((resolve, reject) => {
-      // Coalescing: אם כבר קיים עדכון לאותה שורה בתור, נמזג אותו
       const existingIdx = this.writeQueue.findIndex(
         (op) =>
           op.sheetName === sheetName &&
           op.type === 'UPDATE_ROW' &&
           op.rowIdentifier?.columnKey === idColumnName &&
-          op.rowIdentifier?.value === idValue
+          String(op.rowIdentifier?.value).trim() === String(idValue).trim()
       );
 
       if (existingIdx !== -1) {
         this.writeQueue[existingIdx].values = [updatedRowValues];
         this.writeQueue[existingIdx].timestamp = Date.now();
-        resolve({ coalesced: true, message: 'Merged with queued update' });
+        resolve({ coalesced: true });
         return;
       }
 
@@ -247,9 +217,44 @@ export class SabanServerCore {
     });
   }
 
-  /**
-   * הפעלת הטיימר לעיבוד תור הכתיבה במקבצים (Batch Flush)
-   */
+  public async listDriveFiles(folderId?: string): Promise<DriveFileItem[]> {
+    await this.initialize();
+    const targetFolder = folderId || this.config.driveRootFolderId;
+    const cacheKey = `drive_files_${targetFolder}`;
+    const cached = this.cache.get(cacheKey);
+
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.data;
+    }
+
+    const files = await this.executeWithRetry(async () => {
+      const query = `'${targetFolder}' in parents and trashed = false`;
+      const res = await this.driveClient.files.list({
+        q: query,
+        fields: 'files(id, name, mimeType, webViewLink, thumbnailLink, createdTime, size)',
+        orderBy: 'createdTime desc',
+        pageSize: 50,
+      });
+
+      return (res.data.files || []).map((f) => ({
+        id: f.id || '',
+        name: f.name || 'ללא שם',
+        mimeType: f.mimeType || '',
+        webViewLink: f.webViewLink || '',
+        thumbnailLink: f.thumbnailLink || '',
+        createdTime: f.createdTime || '',
+        size: f.size || '',
+      }));
+    }, `listDriveFiles(${targetFolder})`);
+
+    this.cache.set(cacheKey, {
+      data: files,
+      expiresAt: Date.now() + this.config.cacheTtlMs,
+    });
+
+    return files;
+  }
+
   private startBatchFlusher(): void {
     if (this.flushTimer) clearInterval(this.flushTimer);
     this.flushTimer = setInterval(() => {
@@ -259,9 +264,6 @@ export class SabanServerCore {
     }, this.config.batchFlushIntervalMs);
   }
 
-  /**
-   * עיבוד וביצוע של כל פעולות הכתיבה שהצטברו בתור
-   */
   private async flushQueue(): Promise<void> {
     if (this.isFlushingQueue || this.writeQueue.length === 0) return;
     this.isFlushingQueue = true;
@@ -270,7 +272,6 @@ export class SabanServerCore {
     this.writeQueue = [];
 
     try {
-      // קיבוץ לפי טאב
       const bySheet = new Map<string, SheetWriteOperation[]>();
       for (const op of operations) {
         const list = bySheet.get(op.sheetName) || [];
@@ -279,95 +280,74 @@ export class SabanServerCore {
       }
 
       for (const [sheetName, ops] of bySheet.entries()) {
-        await this.processSheetOperations(sheetName, ops);
+        const appends = ops.filter((o) => o.type === 'APPEND');
+        const updates = ops.filter((o) => o.type === 'UPDATE_ROW');
+
+        if (appends.length > 0) {
+          const allRows = appends.flatMap((a) => a.values);
+          await this.executeWithRetry(async () => {
+            return await this.sheetsClient.spreadsheets.values.append({
+              spreadsheetId: this.config.spreadsheetId,
+              range: `${sheetName}!A:A`,
+              valueInputOption: 'USER_ENTERED',
+              insertDataOption: 'INSERT_ROWS',
+              requestBody: { values: allRows },
+            });
+          }, `appendRows(${sheetName})`);
+          appends.forEach((a) => a.resolve({ success: true, count: allRows.length }));
+        }
+
+        if (updates.length > 0) {
+          const currentData = await this.getSheetValues(sheetName, undefined, true);
+          if (currentData.length > 0) {
+            const headers = currentData[0] as string[];
+            const batchData: sheets_v4.Schema$ValueRange[] = [];
+
+            for (const updateOp of updates) {
+              if (!updateOp.rowIdentifier) continue;
+              const colIndex = headers.indexOf(updateOp.rowIdentifier.columnKey);
+              if (colIndex === -1) continue;
+
+              const targetRowIndex = currentData.findIndex(
+                (row, idx) => idx > 0 && String(row[colIndex]).trim() === String(updateOp.rowIdentifier?.value).trim()
+              );
+
+              if (targetRowIndex !== -1) {
+                const sheetRowNumber = targetRowIndex + 1;
+                const endColLetter = this.getColumnLetter(updateOp.values[0].length);
+                batchData.push({
+                  range: `${sheetName}!A${sheetRowNumber}:${endColLetter}${sheetRowNumber}`,
+                  values: updateOp.values,
+                });
+                updateOp.resolve({ success: true, row: sheetRowNumber });
+              } else {
+                await this.appendRowQueued(sheetName, updateOp.values[0]);
+                updateOp.resolve({ success: true, appended: true });
+              }
+            }
+
+            if (batchData.length > 0) {
+              await this.executeWithRetry(async () => {
+                return await this.sheetsClient.spreadsheets.values.batchUpdate({
+                  spreadsheetId: this.config.spreadsheetId,
+                  requestBody: {
+                    valueInputOption: 'USER_ENTERED',
+                    data: batchData,
+                  },
+                });
+              }, `batchUpdateRows(${sheetName})`);
+            }
+          }
+        }
       }
     } catch (error) {
-      console.error('❌ Batch flush error:', error);
-      // החזרת שגיאה לכל מי שהמתין
+      console.error('❌ Flush error:', error);
       operations.forEach((op) => op.reject(error));
     } finally {
       this.isFlushingQueue = false;
     }
   }
 
-  /**
-   * עיבוד פעולות עבור טאב בודד עם Mutex מקומי למניעת Race Conditions
-   */
-  private async processSheetOperations(sheetName: string, ops: SheetWriteOperation[]): Promise<void> {
-    const appends = ops.filter((o) => o.type === 'APPEND');
-    const updates = ops.filter((o) => o.type === 'UPDATE_ROW');
-
-    // 1. ביצוע Append מרוכז
-    if (appends.length > 0) {
-      const allRowsToAppend = appends.flatMap((a) => a.values);
-      await this.executeWithRetry(async () => {
-        const res = await this.sheetsClient.spreadsheets.values.append({
-          spreadsheetId: this.config.spreadsheetId,
-          range: `${sheetName}!A:A`,
-          valueInputOption: 'USER_ENTERED',
-          insertDataOption: 'INSERT_ROWS',
-          requestBody: {
-            values: allRowsToAppend,
-          },
-        });
-        appends.forEach((a) => a.resolve({ success: true, count: allRowsToAppend.length }));
-        return res;
-      }, `batchAppend(${sheetName})`);
-    }
-
-    // 2. ביצוע Updates מרוכזים
-    if (updates.length > 0) {
-      const currentData = await this.getSheetValues(sheetName, undefined, true);
-      if (currentData.length > 0) {
-        const headers = currentData[0] as string[];
-        const batchData: sheets_v4.Schema$ValueRange[] = [];
-
-        for (const updateOp of updates) {
-          if (!updateOp.rowIdentifier) continue;
-          const colIndex = headers.indexOf(updateOp.rowIdentifier.columnKey);
-          if (colIndex === -1) {
-            updateOp.reject(new Error(`Column ${updateOp.rowIdentifier.columnKey} not found in ${sheetName}`));
-            continue;
-          }
-
-          const targetRowIndex = currentData.findIndex(
-            (row, idx) => idx > 0 && String(row[colIndex]).trim() === String(updateOp.rowIdentifier?.value).trim()
-          );
-
-          if (targetRowIndex !== -1) {
-            const sheetRowNumber = targetRowIndex + 1;
-            const endColLetter = this.getColumnLetter(updateOp.values[0].length);
-            batchData.push({
-              range: `${sheetName}!A${sheetRowNumber}:${endColLetter}${sheetRowNumber}`,
-              values: updateOp.values,
-            });
-            updateOp.resolve({ success: true, row: sheetRowNumber });
-          } else {
-            // אם השורה לא קיימת – נבצע Fallback ל-Append
-            console.warn(`Row with ${updateOp.rowIdentifier.columnKey}=${updateOp.rowIdentifier.value} not found. Appending as new.`);
-            await this.appendRowQueued(sheetName, updateOp.values[0]);
-            updateOp.resolve({ success: true, appended: true });
-          }
-        }
-
-        if (batchData.length > 0) {
-          await this.executeWithRetry(async () => {
-            return await this.sheetsClient.spreadsheets.values.batchUpdate({
-              spreadsheetId: this.config.spreadsheetId,
-              requestBody: {
-                valueInputOption: 'USER_ENTERED',
-                data: batchData,
-              },
-            });
-          }, `batchUpdate(${sheetName})`);
-        }
-      }
-    }
-  }
-
-  /**
-   * ניקוי Cache סלקטיבי
-   */
   public invalidateCache(sheetNamePrefix?: string): void {
     if (!sheetNamePrefix) {
       this.cache.clear();
