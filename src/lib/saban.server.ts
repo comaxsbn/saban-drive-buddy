@@ -23,7 +23,7 @@ async function call(
       "X-Connection-Api-Key": conn,
       "Content-Type": "application/json",
     },
-    body: init.body ? JSON.stringify(init.body) : undefined,
+    body: init.body ? JSON.stringify(init.body) : null,
   });
   if (!res.ok) {
     const text = await res.text();
