@@ -209,6 +209,120 @@ export async function getOrders(forceFresh = false): Promise<Order[]> {
     return [];
   }
 }
+
+
+/**
+ * סנכרון מלא: שולף את כל ההזמנות ותעודות המשלוח, מאגד אותם לתיקי לקוחות,
+ * ומזריק את הרומות המעודכנות מחדש לטאב "תיק_לקוח" בגיליון.
+ */
+export async function syncAndInjectCustomerFiles(): Promise<{ success: boolean; count: number }> {
+  try {
+    // 1. שליפת כל ההזמנות ותעודות המשלוח הקיימות
+    const orders = await getOrders(true);
+    const notes = await getNotes(true);
+
+    const customerMap = new Map<string, {
+      customerId: string;
+      name: string;
+      phone: string;
+      address: string;
+      totalOrders: number;
+      lastActivity: string;
+      status: string;
+    }>();
+
+    // עזר לנרמול שמות מזהים
+    const cleanKey = (str: string) => (str || '').trim().toLowerCase();
+
+    // 2. עיבוד הזמנות
+    for (const o of orders) {
+      if (!o.customerName) continue;
+      const rawName = o.customerName;
+      // שליפת מזהה לקוח מתוך סוגריים אם קיים (למשל: וגשל דאו(519205))
+      const matchId = rawName.match(/\((\d+)\)/);
+      const customerId = matchId ? matchId[1] : `CUST-${Math.abs(hashCode(rawName)) % 9000 + 1000}`;
+      const cleanName = rawName.replace(/\(\d+\)/g, '').trim();
+      const key = cleanKey(cleanName);
+
+      let existing = customerMap.get(key);
+      if (!existing) {
+        existing = {
+          customerId,
+          name: cleanName,
+          phone: o.customerPhone || '',
+          address: o.destination || '',
+          totalOrders: 0,
+          lastActivity: o.dateTime || new Date().toLocaleDateString('he-IL'),
+          status: 'פעיל',
+        };
+        customerMap.set(key, existing);
+      }
+
+      existing.totalOrders += 1;
+      if (o.customerPhone) existing.phone = o.customerPhone;
+      if (o.destination) existing.address = o.destination;
+      if (o.dateTime && o.dateTime > existing.lastActivity) {
+        existing.lastActivity = o.dateTime;
+      }
+    }
+
+    // 3. עיבוד תעודות משלוח להשלמת מידע
+    for (const n of notes) {
+      if (!n.customerName) continue;
+      const cleanName = n.customerName.replace(/\d+/g, '').trim() || n.customerName;
+      const key = cleanKey(cleanName);
+
+      let existing = customerMap.get(key);
+      if (existing) {
+        if (n.documentDate && n.documentDate > existing.lastActivity) {
+          existing.lastActivity = n.documentDate;
+        }
+      }
+    }
+
+    // 4. בניית מערך השורות להזרקה לגיליון (לפי סדר העמודות המצופה בטאב תיק_לקוח)
+    // כותרת: ['מזהה לקוח', 'שם לקוח', 'טלפון ראשי', 'איש קשר', 'כתובת', 'סהכ הזמנות', 'עדכון אחרון', 'סטטוס']
+    const rowsToInject: any[][] = [];
+    for (const c of customerMap.values()) {
+      rowsToInject.push([
+        c.customerId,
+        c.name,
+        c.phone,
+        c.name, // איש קשר ברירת מחדל
+        c.address,
+        c.totalOrders,
+        c.lastActivity,
+        c.status,
+      ]);
+    }
+
+    if (rowsToInject.length === 0) {
+      return { success: true, count: 0 };
+    }
+
+    // 5. מחיקה או איפוס וכתיבה מחדש של טאב תיק לקוח דרך השרת
+    // (מבוסס על מנגנון ה-batchSync או append)
+    for (const row of rowsToInject) {
+      await sabanServer.appendRowQueued(SABAN_SHEET_NAMES.CUSTOMERS, row);
+    }
+
+    sabanServer.invalidateCache(SABAN_SHEET_NAMES.CUSTOMERS);
+    return { success: true, count: rowsToInject.length };
+  } catch (e) {
+    console.error('syncAndInjectCustomerFiles error:', e);
+    return { success: false, count: 0 };
+  }
+}
+
+// פונקציית עזר ליצירת מזהה מספרי עקבי משם הלקוח אם אין מזהה בסוגריים
+function hashCode(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return hash;
+}
 export async function askNoa(prompt: string): Promise<string> {
   try {
     const gasUrl = (sabanServer as any)['config']?.gasUrl || '';
