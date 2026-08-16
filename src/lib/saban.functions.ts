@@ -2,15 +2,11 @@
  * ============================================================================
  * Saban-Drive-Buddy / SabanOS Business Functions & Named Exports
  * File: src/lib/saban.functions.ts
- * Description: Client & Server Safe Operational Functions for TanStack / Vite
+ * Description: Client & SSR-Safe Operational Functions
  * ============================================================================
  */
 
 import { sabanServer, DriveFileItem } from './saban.server';
-
-// ============================================================================
-// הגדרות קבועות וטיפוסים (Types & Constants)
-// ============================================================================
 
 export const SABAN_SHEET_NAMES = {
   ORDERS_LOG: 'לוג_הזמנות_מערכת',
@@ -105,36 +101,36 @@ export interface Reminder {
   isCompleted?: boolean;
 }
 
-// ============================================================================
-// 1. שירותי הזמנות (Orders Named Exports)
-// ============================================================================
-
 export async function getOrders(forceFresh = false): Promise<Order[]> {
-  const raw = await sabanServer.getSheetValues(SABAN_SHEET_NAMES.ORDERS_LOG, undefined, forceFresh);
-  if (!raw || raw.length <= 1) return [];
+  try {
+    const raw = await sabanServer.getSheetValues(SABAN_SHEET_NAMES.ORDERS_LOG, undefined, forceFresh);
+    if (!raw || raw.length <= 1) return [];
 
-  const rows = raw.slice(1);
-  return rows.map((r, idx) => ({
-    id: `ord_${r[1] || idx}`,
-    dateTime: r[0] || '',
-    date: r[0] ? String(r[0]).split(' ')[0] : '',
-    time: r[0] ? String(r[0]).split(' ')[1] : '',
-    orderNumber: String(r[1] || '').trim(),
-    customerName: r[2] || '',
-    customerPhone: r[3] || '',
-    warehouse: r[4] || 'החרש',
-    destination: r[5] || '',
-    items: r[6] || '',
-    itemsText: r[6] || '',
-    bigBagsDeposit: Number(r[7]) || 0,
-    palletsDeposit: Number(r[8]) || 0,
-    status: r[9] || 'pending',
-    etaDistance: r[10] || '',
-    wazeLink: r[11] || '',
-    driveFolderUrl: r[12] || '',
-    noaReview: r[13] || '',
-    syncStatus: r[14] || '',
-  }));
+    const rows = raw.slice(1);
+    return rows.map((r, idx) => ({
+      id: `ord_${r[1] || idx}`,
+      dateTime: r[0] || '',
+      date: r[0] ? String(r[0]).split(' ')[0] : '',
+      time: r[0] ? String(r[0]).split(' ')[1] : '',
+      orderNumber: String(r[1] || '').trim(),
+      customerName: r[2] || '',
+      customerPhone: r[3] || '',
+      warehouse: r[4] || 'החרש',
+      destination: r[5] || '',
+      items: r[6] || '',
+      itemsText: r[6] || '',
+      bigBagsDeposit: Number(r[7]) || 0,
+      palletsDeposit: Number(r[8]) || 0,
+      status: r[9] || 'pending',
+      etaDistance: r[10] || '',
+      wazeLink: r[11] || '',
+      driveFolderUrl: r[12] || '',
+      noaReview: r[13] || '',
+      syncStatus: r[14] || '',
+    }));
+  } catch (e) {
+    return [];
+  }
 }
 
 export async function createOrder(orderData: Partial<Order>): Promise<Order> {
@@ -192,9 +188,7 @@ export async function createOrder(orderData: Partial<Order>): Promise<Order> {
 export async function updateOrder(orderNumber: string, updates: Partial<Order>): Promise<void> {
   const all = await getOrders();
   const existing = all.find((o) => o.orderNumber === String(orderNumber).trim());
-  if (!existing) {
-    throw new Error(`הזמנה ${orderNumber} לא נמצאה`);
-  }
+  if (!existing) return;
 
   const merged: Order = { ...existing, ...updates };
   const updatedRow = [
@@ -236,28 +230,28 @@ export async function searchOrders(searchTerm: string): Promise<Order[]> {
   );
 }
 
-// ============================================================================
-// 2. שירותי תעודות משלוח (Delivery Notes Named Exports)
-// ============================================================================
-
 export async function getNotes(forceFresh = false): Promise<DeliveryNote[]> {
-  const raw = await sabanServer.getSheetValues(SABAN_SHEET_NAMES.DELIVERY_NOTES, undefined, forceFresh);
-  if (!raw || raw.length <= 1) return [];
+  try {
+    const raw = await sabanServer.getSheetValues(SABAN_SHEET_NAMES.DELIVERY_NOTES, undefined, forceFresh);
+    if (!raw || raw.length <= 1) return [];
 
-  const rows = raw.slice(1);
-  return rows.map((r, idx) => ({
-    id: `note_${r[1] || idx}`,
-    documentDate: r[0] || '',
-    documentNumber: String(r[1] || '').trim(),
-    relatedOrderNumber: String(r[2] || '').trim(),
-    customerName: r[3] || '',
-    driverName: r[4] || '',
-    itemsText: r[5] || '',
-    status: r[6] || 'נמסר',
-    matchStatus: r[6] || '✅ תואם',
-    fileUrl: r[7] || '',
-    notes: r[8] || '',
-  }));
+    const rows = raw.slice(1);
+    return rows.map((r, idx) => ({
+      id: `note_${r[1] || idx}`,
+      documentDate: r[0] || '',
+      documentNumber: String(r[1] || '').trim(),
+      relatedOrderNumber: String(r[2] || '').trim(),
+      customerName: r[3] || '',
+      driverName: r[4] || '',
+      itemsText: r[5] || '',
+      status: r[6] || 'נמסר',
+      matchStatus: r[6] || '✅ תואם',
+      fileUrl: r[7] || '',
+      notes: r[8] || '',
+    }));
+  } catch (e) {
+    return [];
+  }
 }
 
 export async function updateNoteStatus(
@@ -265,79 +259,75 @@ export async function updateNoteStatus(
   newStatus: string,
   notesText?: string
 ): Promise<{ success: boolean }> {
-  const allNotes = await getNotes();
-  const cleanId = String(noteNumber).trim();
-  const existing = allNotes.find((n) => n.documentNumber === cleanId || n.id === cleanId);
+  try {
+    const allNotes = await getNotes();
+    const cleanId = String(noteNumber).trim();
+    const existing = allNotes.find((n) => n.documentNumber === cleanId || n.id === cleanId);
 
-  if (!existing) {
-    throw new Error(`תעודת משלוח ${noteNumber} לא נמצאה`);
+    if (!existing) return { success: false };
+
+    const updatedRow = [
+      existing.documentDate,
+      existing.documentNumber,
+      existing.relatedOrderNumber,
+      existing.customerName,
+      existing.driverName,
+      existing.itemsText,
+      newStatus,
+      existing.fileUrl || '',
+      notesText ? `${existing.notes || ''} | ${notesText}` : existing.notes || '',
+    ];
+
+    await sabanServer.updateRowByIdentifierQueued(
+      SABAN_SHEET_NAMES.DELIVERY_NOTES,
+      'מספר תעודת משלוח',
+      existing.documentNumber,
+      updatedRow
+    );
+
+    return { success: true };
+  } catch (e) {
+    return { success: false };
   }
-
-  const updatedRow = [
-    existing.documentDate,
-    existing.documentNumber,
-    existing.relatedOrderNumber,
-    existing.customerName,
-    existing.driverName,
-    existing.itemsText,
-    newStatus,
-    existing.fileUrl || '',
-    notesText ? `${existing.notes || ''} | ${notesText}` : existing.notes || '',
-  ];
-
-  await sabanServer.updateRowByIdentifierQueued(
-    SABAN_SHEET_NAMES.DELIVERY_NOTES,
-    'מספר תעודת משלוח',
-    existing.documentNumber,
-    updatedRow
-  );
-
-  return { success: true };
 }
-
-// ============================================================================
-// 3. שירותי Google Drive (Drive Named Exports)
-// ============================================================================
 
 export async function getDriveFiles(folderId?: string): Promise<DriveFileItem[]> {
   return await sabanServer.listDriveFiles(folderId);
 }
 
-// ============================================================================
-// 4. שירות לקוחות ו-CRM (Customer Named Exports)
-// ============================================================================
-
 export async function touchCustomer(name: string, phone: string, address: string): Promise<void> {
-  const cleanPhone = phone.replace(/[^0-9]/g, '');
-  if (!cleanPhone) return;
+  try {
+    const cleanPhone = phone.replace(/[^0-9]/g, '');
+    if (!cleanPhone) return;
 
-  const raw = await sabanServer.getSheetValues(SABAN_SHEET_NAMES.CUSTOMERS);
-  const rows = raw.slice(1);
-  const existing = rows.find((r) => String(r[2]).replace(/[^0-9]/g, '') === cleanPhone);
+    const raw = await sabanServer.getSheetValues(SABAN_SHEET_NAMES.CUSTOMERS);
+    const rows = raw.slice(1);
+    const existing = rows.find((r) => String(r[2]).replace(/[^0-9]/g, '') === cleanPhone);
 
-  if (existing) {
-    const totalOrders = (Number(existing[5]) || 0) + 1;
-    const updatedRow = [
-      existing[0],
-      existing[1] || name,
-      phone,
-      existing[3] || name,
-      address || existing[4],
-      totalOrders,
-      existing[6] || '',
-      'פעיל',
-    ];
-    await sabanServer.updateRowByIdentifierQueued(
-      SABAN_SHEET_NAMES.CUSTOMERS,
-      'טלפון ראשי',
-      phone,
-      updatedRow
-    );
-  } else {
-    const newId = `CUST-${cleanPhone.slice(-4) || 'SBN'}`;
-    const newRow = [newId, name, phone, name, address, 1, '', 'לקוח חדש'];
-    await sabanServer.appendRowQueued(SABAN_SHEET_NAMES.CUSTOMERS, newRow);
-  }
+    if (existing) {
+      const totalOrders = (Number(existing[5]) || 0) + 1;
+      const updatedRow = [
+        existing[0],
+        existing[1] || name,
+        phone,
+        existing[3] || name,
+        address || existing[4],
+        totalOrders,
+        existing[6] || '',
+        'פעיל',
+      ];
+      await sabanServer.updateRowByIdentifierQueued(
+        SABAN_SHEET_NAMES.CUSTOMERS,
+        'טלפון ראשי',
+        phone,
+        updatedRow
+      );
+    } else {
+      const newId = `CUST-${cleanPhone.slice(-4) || 'SBN'}`;
+      const newRow = [newId, name, phone, name, address, 1, '', 'לקוח חדש'];
+      await sabanServer.appendRowQueued(SABAN_SHEET_NAMES.CUSTOMERS, newRow);
+    }
+  } catch (e) {}
 }
 
 export async function createCustomer(customerData: Partial<Customer>): Promise<Customer> {
@@ -352,45 +342,47 @@ export async function createCustomer(customerData: Partial<Customer>): Promise<C
 }
 
 export async function updateCustomer(customerId: string, updates: Partial<Customer>): Promise<void> {
-  const raw = await sabanServer.getSheetValues(SABAN_SHEET_NAMES.CUSTOMERS);
-  const rows = raw.slice(1);
-  const existing = rows.find((r) => String(r[0]) === customerId || String(r[2]) === customerId);
+  try {
+    const raw = await sabanServer.getSheetValues(SABAN_SHEET_NAMES.CUSTOMERS);
+    const rows = raw.slice(1);
+    const existing = rows.find((r) => String(r[0]) === customerId || String(r[2]) === customerId);
 
-  if (existing) {
-    const updatedRow = [
-      existing[0],
-      updates.name || existing[1],
-      updates.phone || existing[2],
-      updates.contactPerson || existing[3],
-      updates.address || existing[4],
-      existing[5],
-      existing[6],
-      'פעיל',
-    ];
-    await sabanServer.updateRowByIdentifierQueued(SABAN_SHEET_NAMES.CUSTOMERS, 'מזהה לקוח', existing[0], updatedRow);
-  }
+    if (existing) {
+      const updatedRow = [
+        existing[0],
+        updates.name || existing[1],
+        updates.phone || existing[2],
+        updates.contactPerson || existing[3],
+        updates.address || existing[4],
+        existing[5],
+        existing[6],
+        'פעיל',
+      ];
+      await sabanServer.updateRowByIdentifierQueued(SABAN_SHEET_NAMES.CUSTOMERS, 'מזהה לקוח', existing[0], updatedRow);
+    }
+  } catch (e) {}
 }
 
 export async function searchCustomers(query: string): Promise<Customer[]> {
-  const raw = await sabanServer.getSheetValues(SABAN_SHEET_NAMES.CUSTOMERS);
-  const rows = raw.slice(1);
-  const term = query.toLowerCase();
+  try {
+    const raw = await sabanServer.getSheetValues(SABAN_SHEET_NAMES.CUSTOMERS);
+    const rows = raw.slice(1);
+    const term = query.toLowerCase();
 
-  return rows
-    .filter((r) => String(r[1]).toLowerCase().includes(term) || String(r[2]).includes(term))
-    .map((r) => ({
-      customerNumber: r[0],
-      name: r[1],
-      phone: r[2],
-      contactPerson: r[3],
-      address: r[4],
-      totalOrders: Number(r[5]) || 0,
-    }));
+    return rows
+      .filter((r) => String(r[1]).toLowerCase().includes(term) || String(r[2]).includes(term))
+      .map((r) => ({
+        customerNumber: r[0],
+        name: r[1],
+        phone: r[2],
+        contactPerson: r[3],
+        address: r[4],
+        totalOrders: Number(r[5]) || 0,
+      }));
+  } catch (e) {
+    return [];
+  }
 }
-
-// ============================================================================
-// 5. שירותי נהגים ושיגור (Drivers & Dispatch Named Exports)
-// ============================================================================
 
 export async function getAllDrivers(): Promise<Driver[]> {
   return [
@@ -409,26 +401,26 @@ export async function updateDriver(driverId: string, updates: Partial<Driver>): 
   return { success: true };
 }
 
-// ============================================================================
-// 6. שירותי מלאי ותזכורות (Inventory & Reminders Named Exports)
-// ============================================================================
-
 export async function getInventory(query?: string): Promise<InventoryItem[]> {
-  const raw = await sabanServer.getSheetValues(SABAN_SHEET_NAMES.INVENTORY);
-  if (!raw || raw.length <= 1) return [];
+  try {
+    const raw = await sabanServer.getSheetValues(SABAN_SHEET_NAMES.INVENTORY);
+    if (!raw || raw.length <= 1) return [];
 
-  const items = raw.slice(1).map((r) => ({
-    sku: String(r[0] || '').trim(),
-    name: String(r[1] || '').trim(),
-    currentStock: Number(r[2]) || 0,
-    price: Number(r[3]) || 0,
-  }));
+    const items = raw.slice(1).map((r) => ({
+      sku: String(r[0] || '').trim(),
+      name: String(r[1] || '').trim(),
+      currentStock: Number(r[2]) || 0,
+      price: Number(r[3]) || 0,
+    }));
 
-  if (query) {
-    const term = query.toLowerCase();
-    return items.filter((i) => i.name.toLowerCase().includes(term) || i.sku.includes(term));
+    if (query) {
+      const term = query.toLowerCase();
+      return items.filter((i) => i.name.toLowerCase().includes(term) || i.sku.includes(term));
+    }
+    return items;
+  } catch (e) {
+    return [];
   }
-  return items;
 }
 
 export async function updateInventoryStock(sku: string, qty: number): Promise<{ success: boolean }> {
@@ -457,13 +449,8 @@ export async function deleteReminder(id: string): Promise<{ success: boolean }> 
   return { success: true };
 }
 
-// ============================================================================
-// 7. מנוע נועה AI (Noa Chat Engine - עבור NoaChat.tsx)
-// ============================================================================
-
 export const noaSystemInstruction = `
 את "נועה" (Noa) - מנהלת הלוגיסטיקה והמשימות החכמה של ח. סבן חומרי בניין.
-את פועלת בסגנון מקצועי, חד, ענייני ותומך.
 `;
 
 const sanitizeForVoice = (text: string): string => {
