@@ -210,14 +210,14 @@ export async function getOrders(forceFresh = false): Promise<Order[]> {
   }
 }
 
-
 /**
- * סנכרון מלא: שולף את כל ההזמנות ותעודות המשלוח, מאגד אותם לתיקי לקוחות,
- * ומזריק את הרומות המעודכנות מחדש לטאב "תיק_לקוח" בגיליון.
+ * ============================================================================
+ * סנכרון תיקי לקוחות: שאיבה מהזמנות ותעודות משלוח והזרקה מחדש לטאב "תיק_לקוח"
+ * ============================================================================
  */
 export async function syncAndInjectCustomerFiles(): Promise<{ success: boolean; count: number }> {
   try {
-    // 1. שליפת כל ההזמנות ותעודות המשלוח הקיימות
+    // 1. שליפה נקייה של כל ההזמנות ותעודות המשלוח (עם כפיית נתונים טריים)
     const orders = await getOrders(true);
     const notes = await getNotes(true);
 
@@ -231,14 +231,15 @@ export async function syncAndInjectCustomerFiles(): Promise<{ success: boolean; 
       status: string;
     }>();
 
-    // עזר לנרמול שמות מזהים
+    // פונקציית עזר לנרמול מפתחות חיפוש
     const cleanKey = (str: string) => (str || '').trim().toLowerCase();
 
-    // 2. עיבוד הזמנות
+    // 2. עיבוד ואיגוד מתוך ההזמנות
     for (const o of orders) {
       if (!o.customerName) continue;
       const rawName = o.customerName;
-      // שליפת מזהה לקוח מתוך סוגריים אם קיים (למשל: וגשל דאו(519205))
+      
+      // חילוץ מזהה לקוח בסוגריים (לדוגמה: וגשל דאו(519205))
       const matchId = rawName.match(/\((\d+)\)/);
       const customerId = matchId ? matchId[1] : `CUST-${Math.abs(hashCode(rawName)) % 9000 + 1000}`;
       const cleanName = rawName.replace(/\(\d+\)/g, '').trim();
@@ -266,7 +267,7 @@ export async function syncAndInjectCustomerFiles(): Promise<{ success: boolean; 
       }
     }
 
-    // 3. עיבוד תעודות משלוח להשלמת מידע
+    // 3. עיבוד ועדכון מתוך תעודות המשלוח
     for (const n of notes) {
       if (!n.customerName) continue;
       const cleanName = n.customerName.replace(/\d+/g, '').trim() || n.customerName;
@@ -280,15 +281,15 @@ export async function syncAndInjectCustomerFiles(): Promise<{ success: boolean; 
       }
     }
 
-    // 4. בניית מערך השורות להזרקה לגיליון (לפי סדר העמודות המצופה בטאב תיק_לקוח)
-    // כותרת: ['מזהה לקוח', 'שם לקוח', 'טלפון ראשי', 'איש קשר', 'כתובת', 'סהכ הזמנות', 'עדכון אחרון', 'סטטוס']
+    // 4. בניית מערך השורות בהתאם למבנה העמודות המצופה בטאב "תיק_לקוח":
+    // ['מזהה לקוח', 'שם לקוח', 'טלפון ראשי', 'איש קשר', 'כתובת', 'סהכ הזמנות', 'עדכון אחרון', 'סטטוס']
     const rowsToInject: any[][] = [];
     for (const c of customerMap.values()) {
       rowsToInject.push([
         c.customerId,
         c.name,
         c.phone,
-        c.name, // איש קשר ברירת מחדל
+        c.name,
         c.address,
         c.totalOrders,
         c.lastActivity,
@@ -300,13 +301,14 @@ export async function syncAndInjectCustomerFiles(): Promise<{ success: boolean; 
       return { success: true, count: 0 };
     }
 
-    // 5. מחיקה או איפוס וכתיבה מחדש של טאב תיק לקוח דרך השרת
-    // (מבוסס על מנגנון ה-batchSync או append)
+    // 5. הזרקת הנתונים המעובדים לתור הכתיבה של השרת מול הגיליון
     for (const row of rowsToInject) {
       await sabanServer.appendRowQueued(SABAN_SHEET_NAMES.CUSTOMERS, row);
     }
 
+    // ניקוי הקאש כדי שהממשק יציג מיד את הנתונים המעודכנים
     sabanServer.invalidateCache(SABAN_SHEET_NAMES.CUSTOMERS);
+    
     return { success: true, count: rowsToInject.length };
   } catch (e) {
     console.error('syncAndInjectCustomerFiles error:', e);
@@ -314,7 +316,7 @@ export async function syncAndInjectCustomerFiles(): Promise<{ success: boolean; 
   }
 }
 
-// פונקציית עזר ליצירת מזהה מספרי עקבי משם הלקוח אם אין מזהה בסוגריים
+// פונקציית עזר ליצירת מזהה מספרי יציב
 function hashCode(str: string): number {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
@@ -323,6 +325,7 @@ function hashCode(str: string): number {
   }
   return hash;
 }
+
 export async function askNoa(prompt: string): Promise<string> {
   try {
     const gasUrl = (sabanServer as any)['config']?.gasUrl || '';
