@@ -1,6 +1,6 @@
 /**
  * src/lib/saban.functions.ts
- * מודול ניהול לוגיקה וממשק מול הגיליון והמערכת
+ * מודול ניהול לוגיקה, צ'אט נועה וממשק מול הגיליון והמערכת
  */
 
 export interface OrderData {
@@ -26,10 +26,29 @@ export interface NoteData {
 }
 
 /**
+ * שליחת שאלה / הודעה לעוזרת החכמה נועה (Noa AI)
+ */
+export async function askNoa(prompt: string): Promise<string> {
+  const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwJDwvb3wPYFoCEVCH_E9Mdco5w_dZeh35KNtCJB8_GdSllt59vV10oWgEA-QaH4S5A/exec";
+  
+  try {
+    const response = await fetch(SCRIPT_URL, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "askNoa", prompt }),
+    });
+    return "השאלה נשלחה בהצלחה לנועה.";
+  } catch (error) {
+    console.error("Noa AI Error:", error);
+    return "שגיאה בתקשורת עם נועה.";
+  }
+}
+
+/**
  * שליפת כל ההזמנות
  */
 export async function getOrders(): Promise<OrderData[]> {
-  // החזרת רשימה ריקה או קריאה לשרת
   return [];
 }
 
