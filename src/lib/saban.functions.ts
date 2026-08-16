@@ -9,7 +9,7 @@
 import { sabanServer, DriveFileItem } from './saban.server';
 
 export const SABAN_SHEET_NAMES = {
-  ORDERS_LOG: 'הזמנות', // תואם לגיליון הפעיל הראשי
+  ORDERS_LOG: 'הזמנות',
   ORDERS_LOG_ALT: 'לוג_הזמנות_מערכת',
   DELIVERY_NOTES: 'תעודות_משלוח',
   RECONCILIATION: 'בקרת_סטיות_והצלבות',
@@ -107,9 +107,6 @@ export interface Reminder {
   isCompleted: boolean;
 }
 
-/**
- * פונקציית עזר להמרת כל ערך למחרוזת בטוחה (מונעת קריסות של .includes)
- */
 function safeString(val: any, fallback = ''): string {
   if (val === null || val === undefined) return fallback;
   if (val instanceof Date) {
@@ -156,7 +153,6 @@ export async function getOrders(forceFresh = false): Promise<Order[]> {
       let noaReview = 'נבדק ע"י נועה AI';
 
       if (isNineColumnFormat) {
-        // פורמט 9 עמודות של גיליון "הזמנות" (קומקס)
         warehouse = safeString(r[3], '4(החרש)');
         destination = safeString(r[4], 'הוד השרון');
         itemsText = safeString(r[5], '');
@@ -165,7 +161,6 @@ export async function getOrders(forceFresh = false): Promise<Order[]> {
         status = safeString(r[8], 'מאושר');
         wazeLink = destination ? `https://www.waze.com/ul?q=${encodeURIComponent(destination)}&navigate=yes` : '';
       } else {
-        // פורמט 15 עמודות מורחב
         phone = safeString(r[3], '');
         warehouse = safeString(r[4], '4(החרש)');
         destination = safeString(r[5], 'הוד השרון');
