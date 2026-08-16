@@ -9,7 +9,7 @@ export const NOTES_TAB = "Untitled";
 
 export const DRIVE = {
   scans: "1Hnq5RjGmE0368ZCAKBratRJGzaj0wJJl",
-  customers: "1JGNbTlmB5yBH_cLOApKTvE39CEL6roFF",
+  customers: "1dcQ4TfEZzIOvGLqK3arRiVpyU2l6UM7jcvS1QW_b3Lg",
 } as const;
 
 export const driveFolderUrl = (id: string) => `https://drive.google.com/drive/folders/${id}`;
