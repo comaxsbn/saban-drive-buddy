@@ -1,5 +1,40 @@
 const GATEWAY = "https://connector-gateway.lovable.dev";
 
+/** Short-lived server cache: Sheets allows ~60 reads/min per project. */
+const TTL_MS = 45_000;
+const cache = new Map<string, { at: number; value: unknown }>();
+const inflight = new Map<string, Promise<unknown>>();
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function cached<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < TTL_MS) return hit.value as T;
+  const running = inflight.get(key);
+  if (running) return running as Promise<T>;
+  const p = (async () => {
+    try {
+      const value = await fn();
+      cache.set(key, { at: Date.now(), value });
+      return value;
+    } catch (err) {
+      // Serve slightly stale data rather than blowing up the page on a 429.
+      if (hit) return hit.value as T;
+      throw err;
+    } finally {
+      inflight.delete(key);
+    }
+  })();
+  inflight.set(key, p);
+  return p;
+}
+
+function invalidate(spreadsheetId: string) {
+  for (const key of cache.keys()) if (key.includes(spreadsheetId)) cache.delete(key);
+}
+
 function keys(service: "google_sheets" | "google_drive") {
   const lovable = process.env["LOVABLE_API_KEY"];
   const conn =
@@ -16,45 +51,65 @@ async function call(
   init: { method?: string; body?: unknown } = {},
 ) {
   const { lovable, conn } = keys(service);
-  const res = await fetch(`${GATEWAY}/${service}${path}`, {
-    method: init.method ?? "GET",
-    headers: {
-      Authorization: `Bearer ${lovable}`,
-      "X-Connection-Api-Key": conn,
-      "Content-Type": "application/json",
-    },
-    body: init.body ? JSON.stringify(init.body) : null,
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    console.error(`Gateway ${service} failed [${res.status}]: ${text}`);
-    throw new Error(`בקשה ל-Google נכשלה [${res.status}]: ${text.slice(0, 400)}`);
+  let lastText = "";
+  let lastStatus = 0;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const res = await fetch(`${GATEWAY}/${service}${path}`, {
+      method: init.method ?? "GET",
+      headers: {
+        Authorization: `Bearer ${lovable}`,
+        "X-Connection-Api-Key": conn,
+        "Content-Type": "application/json",
+      },
+      body: init.body ? JSON.stringify(init.body) : null,
+    });
+    if (res.ok) return res.json();
+    lastStatus = res.status;
+    lastText = await res.text();
+    console.error(`Gateway ${service} failed [${res.status}]: ${lastText.slice(0, 300)}`);
+    const retryable = res.status === 429 || res.status >= 500;
+    if (!retryable || attempt === 3) break;
+    const retryAfter = Number(res.headers.get("retry-after"));
+    await sleep(
+      Number.isFinite(retryAfter) && retryAfter > 0
+        ? retryAfter * 1000
+        : 700 * 2 ** attempt + Math.random() * 300,
+    );
   }
-  return res.json();
+  if (lastStatus === 429) {
+    throw new Error("מכסת הקריאות של Google נוצלה זמנית. נסו שוב בעוד כדקה.");
+  }
+  throw new Error(`בקשה ל-Google נכשלה [${lastStatus}]: ${lastText.slice(0, 400)}`);
 }
 
 export async function readRange(spreadsheetId: string, range: string) {
-  const data = (await call(
-    "google_sheets",
-    `/v4/spreadsheets/${spreadsheetId}/values/${range}`,
-  )) as { values?: string[][] };
+  const data = await cached(`read:${spreadsheetId}:${range}`, async () => {
+    return (await call(
+      "google_sheets",
+      `/v4/spreadsheets/${spreadsheetId}/values/${range}`,
+    )) as { values?: string[][] };
+  });
   return data.values ?? [];
 }
 
 export async function appendRow(spreadsheetId: string, range: string, values: string[]) {
-  return call(
+  const out = await call(
     "google_sheets",
     `/v4/spreadsheets/${spreadsheetId}/values/${range}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
     { method: "POST", body: { values: [values] } },
   );
+  invalidate(spreadsheetId);
+  return out;
 }
 
 export async function writeRange(spreadsheetId: string, range: string, values: string[][]) {
-  return call(
+  const out = await call(
     "google_sheets",
     `/v4/spreadsheets/${spreadsheetId}/values/${range}?valueInputOption=USER_ENTERED`,
     { method: "PUT", body: { values } },
   );
+  invalidate(spreadsheetId);
+  return out;
 }
 
 export async function listDrive(folderId: string, search?: string) {
@@ -69,13 +124,14 @@ export async function listDrive(folderId: string, search?: string) {
   const data = (await call("google_drive", `/drive/v3/files?${params.toString()}`)) as {
     files?: unknown[];
   };
-  return (data.files ?? []) as {
+  const files = (data.files ?? []) as {
     id: string;
     name: string;
     mimeType: string;
     modifiedTime?: string;
     webViewLink?: string;
   }[];
+  return files;
 }
 
 export async function chatWithNoa(
