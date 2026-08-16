@@ -29,7 +29,7 @@ export interface NoteData {
  * שליחת שאלה / הודעה לעוזרת החכמה נועה (Noa AI)
  */
 export async function askNoa(prompt: string): Promise<string> {
-  const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwJDwvb3wPYFoCEVCH_E9Mdco5w_dZeh35KNtCJB8_GdSllt59vV10oWgEA-QaH4S5A/exec";
+  const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxerycVRB76vgXd6JnIZG36iWtyNAy7mxDBVfyKvbf0zGSVOWeyvLQjF-SFll8HzyLI/exec";
   
   try {
     const response = await fetch(SCRIPT_URL, {
