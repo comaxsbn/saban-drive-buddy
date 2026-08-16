@@ -2,18 +2,14 @@
  * ============================================================================
  * Saban-Drive-Buddy / SabanOS Enterprise Core Server Engine
  * File: src/lib/saban.server.ts
- * Description: Production-Ready Google Sheets & Drive Resilient Server Infrastructure
+ * Description: Zero-Dependency High-Performance Google Sheets & Drive Bridge
  * ============================================================================
  */
 
-import { google, sheets_v4, drive_v3 } from 'googleapis';
-import { JWT } from 'google-auth-library';
-
 export interface SabanServerConfig {
+  gasUrl: string;
   spreadsheetId: string;
   driveRootFolderId: string;
-  clientEmail: string;
-  privateKey: string;
   cacheTtlMs: number;
   batchFlushIntervalMs: number;
   maxBatchSize: number;
@@ -44,20 +40,21 @@ export interface DriveFileItem {
 
 export class SabanServerCore {
   private static instance: SabanServerCore;
-  private sheetsClient!: sheets_v4.Sheets;
-  private driveClient!: drive_v3.Drive;
-  private authClient!: JWT;
-  private isInitialized = false;
 
   private config: SabanServerConfig = {
-    spreadsheetId: process.env.SABAN_SPREADSHEET_ID || '1i2J9ByIAerL48eIRYnT9SJLJcUryR0mlkD8uiWjjZPc',
-    driveRootFolderId: process.env.SABAN_DRIVE_FOLDER_ID || '1JCxbchEs3hznBCuXMpfTCzbMO7Ncgiuz',
-    clientEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '',
-    privateKey: (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n'),
+    gasUrl:
+      (typeof process !== 'undefined' && (process.env.VITE_GAS_URL || process.env.VITE_GAS_URL_GEMINI)) ||
+      'https://script.google.com/macros/s/AKfycbyPYCXfefRP9dNLc6hiDV64H6JZWMuSpWyP6UdNkXbEWWcoUmr8yW37i5UFACVB4fVp/exec',
+    spreadsheetId:
+      (typeof process !== 'undefined' && process.env.SABAN_SPREADSHEET_ID) ||
+      '1i2J9ByIAerL48eIRYnT9SJLJcUryR0mlkD8uiWjjZPc',
+    driveRootFolderId:
+      (typeof process !== 'undefined' && process.env.SABAN_DRIVE_FOLDER_ID) ||
+      '1JCxbchEs3hznBCuXMpfTCzbMO7Ncgiuz',
     cacheTtlMs: 30_000,
     batchFlushIntervalMs: 800,
     maxBatchSize: 50,
-    maxRetries: 4,
+    maxRetries: 3,
     baseRetryDelayMs: 1000,
   };
 
@@ -77,33 +74,9 @@ export class SabanServerCore {
     return SabanServerCore.instance;
   }
 
-  public async initialize(customConfig?: Partial<SabanServerConfig>): Promise<void> {
-    if (this.isInitialized) return;
-
-    if (customConfig) {
-      this.config = { ...this.config, ...customConfig };
-    }
-
-    try {
-      this.authClient = new google.auth.JWT({
-        email: this.config.clientEmail || undefined,
-        key: this.config.privateKey || undefined,
-        scopes: [
-          'https://www.googleapis.com/auth/spreadsheets',
-          'https://www.googleapis.com/auth/drive.readonly',
-          'https://www.googleapis.com/auth/drive.file',
-        ],
-      });
-
-      this.sheetsClient = google.sheets({ version: 'v4', auth: this.authClient });
-      this.driveClient = google.drive({ version: 'v3', auth: this.authClient });
-      this.isInitialized = true;
-    } catch (error) {
-      console.error('❌ Failed to initialize Saban Server Engine Auth:', error);
-      throw error;
-    }
-  }
-
+  /**
+   * ביצוע בקשות עם Retry ונסיגה מעריכית
+   */
   private async executeWithRetry<T>(fn: () => Promise<T>, context: string): Promise<T> {
     let attempt = 0;
     while (attempt < this.config.maxRetries) {
@@ -111,27 +84,24 @@ export class SabanServerCore {
         return await fn();
       } catch (error: any) {
         attempt++;
-        const status = error?.status || error?.response?.status;
-        const isRateLimit = status === 429 || error?.message?.includes('Quota exceeded');
-        const isTransient = status >= 500 && status < 600;
-
-        if ((isRateLimit || isTransient) && attempt < this.config.maxRetries) {
+        if (attempt < this.config.maxRetries) {
           const delay = Math.pow(2, attempt) * this.config.baseRetryDelayMs + Math.random() * 200;
-          console.warn(`⏳ [RateLimit in ${context}] Retrying (${attempt}/${this.config.maxRetries}) after ${Math.round(delay)}ms...`);
+          console.warn(`⏳ [Retry in ${context}] Attempt ${attempt}/${this.config.maxRetries} after ${Math.round(delay)}ms...`);
           await new Promise((res) => setTimeout(res, delay));
         } else {
+          console.error(`❌ Request failed in ${context}:`, error);
           throw error;
         }
       }
     }
-    throw new Error(`Execution failed after ${this.config.maxRetries} retries in ${context}`);
+    throw new Error(`Failed after ${this.config.maxRetries} retries in ${context}`);
   }
 
+  /**
+   * שליפת נתונים מטבלאות בשיטס עם מנגנון Cache
+   */
   public async getSheetValues(sheetName: string, range?: string, forceFresh = false): Promise<any[][]> {
-    await this.initialize();
-    const fullRange = range ? `${sheetName}!${range}` : `${sheetName}!A1:Z`;
-    const cacheKey = `read_${this.config.spreadsheetId}_${fullRange}`;
-
+    const cacheKey = `read_${sheetName}_${range || 'all'}`;
     const cached = this.cache.get(cacheKey);
     const now = Date.now();
 
@@ -141,25 +111,38 @@ export class SabanServerCore {
 
     try {
       const data = await this.executeWithRetry(async () => {
-        const res = await this.sheetsClient.spreadsheets.values.get({
-          spreadsheetId: this.config.spreadsheetId,
-          range: fullRange,
-          valueRenderOption: 'FORMATTED_VALUE',
+        const url = `${this.config.gasUrl}?action=readSheet&sheet=${encodeURIComponent(sheetName)}${
+          range ? `&range=${encodeURIComponent(range)}` : ''
+        }`;
+
+        const res = await fetch(url, {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' },
         });
-        return res.data.values || [];
-      }, `getSheetValues(${fullRange})`);
+
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status} fetching ${sheetName}`);
+        }
+
+        const json = await res.json();
+        return Array.isArray(json) ? json : json.data || [];
+      }, `getSheetValues(${sheetName})`);
 
       this.cache.set(cacheKey, {
         data,
         expiresAt: now + this.config.cacheTtlMs,
       });
+
       return data;
     } catch (err) {
       if (cached) return cached.data;
-      throw err;
+      return [];
     }
   }
 
+  /**
+   * הוספת שורה לתור הכתיבה המושהית (Write-Behind)
+   */
   public appendRowQueued(sheetName: string, rowValues: any[]): Promise<any> {
     return new Promise((resolve, reject) => {
       this.writeQueue.push({
@@ -180,6 +163,9 @@ export class SabanServerCore {
     });
   }
 
+  /**
+   * עדכון שורה לפי מזהה
+   */
   public updateRowByIdentifierQueued(
     sheetName: string,
     idColumnName: string,
@@ -217,8 +203,10 @@ export class SabanServerCore {
     });
   }
 
+  /**
+   * שליפת קבצי דרייב דרך הצינור
+   */
   public async listDriveFiles(folderId?: string): Promise<DriveFileItem[]> {
-    await this.initialize();
     const targetFolder = folderId || this.config.driveRootFolderId;
     const cacheKey = `drive_files_${targetFolder}`;
     const cached = this.cache.get(cacheKey);
@@ -227,32 +215,29 @@ export class SabanServerCore {
       return cached.data;
     }
 
-    const files = await this.executeWithRetry(async () => {
-      const query = `'${targetFolder}' in parents and trashed = false`;
-      const res = await this.driveClient.files.list({
-        q: query,
-        fields: 'files(id, name, mimeType, webViewLink, thumbnailLink, createdTime, size)',
-        orderBy: 'createdTime desc',
-        pageSize: 50,
+    try {
+      const files = await this.executeWithRetry(async () => {
+        const url = `${this.config.gasUrl}?action=listFiles&folderId=${encodeURIComponent(targetFolder)}`;
+        const res = await fetch(url, {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' },
+        });
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        return Array.isArray(json) ? json : json.files || [];
+      }, `listDriveFiles`);
+
+      this.cache.set(cacheKey, {
+        data: files,
+        expiresAt: Date.now() + this.config.cacheTtlMs,
       });
 
-      return (res.data.files || []).map((f) => ({
-        id: f.id || '',
-        name: f.name || 'ללא שם',
-        mimeType: f.mimeType || '',
-        webViewLink: f.webViewLink || '',
-        thumbnailLink: f.thumbnailLink || '',
-        createdTime: f.createdTime || '',
-        size: f.size || '',
-      }));
-    }, `listDriveFiles(${targetFolder})`);
-
-    this.cache.set(cacheKey, {
-      data: files,
-      expiresAt: Date.now() + this.config.cacheTtlMs,
-    });
-
-    return files;
+      return files;
+    } catch (err) {
+      if (cached) return cached.data;
+      return [];
+    }
   }
 
   private startBatchFlusher(): void {
@@ -272,74 +257,26 @@ export class SabanServerCore {
     this.writeQueue = [];
 
     try {
-      const bySheet = new Map<string, SheetWriteOperation[]>();
-      for (const op of operations) {
-        const list = bySheet.get(op.sheetName) || [];
-        list.push(op);
-        bySheet.set(op.sheetName, list);
-      }
+      const payload = {
+        action: 'batchSync',
+        operations: operations.map((op) => ({
+          sheetName: op.sheetName,
+          type: op.type,
+          rowIdentifier: op.rowIdentifier,
+          values: op.values,
+        })),
+      };
 
-      for (const [sheetName, ops] of bySheet.entries()) {
-        const appends = ops.filter((o) => o.type === 'APPEND');
-        const updates = ops.filter((o) => o.type === 'UPDATE_ROW');
+      await this.executeWithRetry(async () => {
+        await fetch(this.config.gasUrl, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify(payload),
+        });
+      }, 'flushBatchQueue');
 
-        if (appends.length > 0) {
-          const allRows = appends.flatMap((a) => a.values);
-          await this.executeWithRetry(async () => {
-            return await this.sheetsClient.spreadsheets.values.append({
-              spreadsheetId: this.config.spreadsheetId,
-              range: `${sheetName}!A:A`,
-              valueInputOption: 'USER_ENTERED',
-              insertDataOption: 'INSERT_ROWS',
-              requestBody: { values: allRows },
-            });
-          }, `appendRows(${sheetName})`);
-          appends.forEach((a) => a.resolve({ success: true, count: allRows.length }));
-        }
-
-        if (updates.length > 0) {
-          const currentData = await this.getSheetValues(sheetName, undefined, true);
-          if (currentData.length > 0) {
-            const headers = currentData[0] as string[];
-            const batchData: sheets_v4.Schema$ValueRange[] = [];
-
-            for (const updateOp of updates) {
-              if (!updateOp.rowIdentifier) continue;
-              const colIndex = headers.indexOf(updateOp.rowIdentifier.columnKey);
-              if (colIndex === -1) continue;
-
-              const targetRowIndex = currentData.findIndex(
-                (row, idx) => idx > 0 && String(row[colIndex]).trim() === String(updateOp.rowIdentifier?.value).trim()
-              );
-
-              if (targetRowIndex !== -1) {
-                const sheetRowNumber = targetRowIndex + 1;
-                const endColLetter = this.getColumnLetter(updateOp.values[0].length);
-                batchData.push({
-                  range: `${sheetName}!A${sheetRowNumber}:${endColLetter}${sheetRowNumber}`,
-                  values: updateOp.values,
-                });
-                updateOp.resolve({ success: true, row: sheetRowNumber });
-              } else {
-                await this.appendRowQueued(sheetName, updateOp.values[0]);
-                updateOp.resolve({ success: true, appended: true });
-              }
-            }
-
-            if (batchData.length > 0) {
-              await this.executeWithRetry(async () => {
-                return await this.sheetsClient.spreadsheets.values.batchUpdate({
-                  spreadsheetId: this.config.spreadsheetId,
-                  requestBody: {
-                    valueInputOption: 'USER_ENTERED',
-                    data: batchData,
-                  },
-                });
-              }, `batchUpdateRows(${sheetName})`);
-            }
-          }
-        }
-      }
+      operations.forEach((op) => op.resolve({ success: true, count: op.values.length }));
     } catch (error) {
       console.error('❌ Flush error:', error);
       operations.forEach((op) => op.reject(error));
@@ -358,17 +295,6 @@ export class SabanServerCore {
         this.cache.delete(key);
       }
     }
-  }
-
-  private getColumnLetter(colIndex: number): string {
-    let temp = '';
-    let letter = '';
-    while (colIndex > 0) {
-      temp = ((colIndex - 1) % 26) + 65;
-      letter = String.fromCharCode(Number(temp)) + letter;
-      colIndex = Math.floor((colIndex - 1) / 26);
-    }
-    return letter || 'Z';
   }
 }
 
