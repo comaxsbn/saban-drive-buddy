@@ -99,3 +99,32 @@ export async function syncToJoniSystem(action: string, data: any) {
     return { success: false, error };
   }
 }
+export async function getOrders() {
+  const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwJDwvb3wPYFoCEVCH_E9Mdco5w_dZeh35KNtCJB8_GdSllt59vV10oWgEA-QaH4S5A/exec?action=readSheet&sheet=הזמנות";
+  
+  try {
+    const response = await fetch(SCRIPT_URL);
+    const result = await response.json();
+    console.log("🔍 תוצאה שהתקבלה מהגיליון:", result);
+    
+    if (result.status === "success" && Array.isArray(result.data)) {
+      // אם הנתונים מגיעים כמערך של מערכים (Rows), יש להמיר אותם לאובייקטים:
+      const rows = result.data.slice(1); // דילוג על שורת הכותרת
+      return rows.map((row: any[]) => ({
+        timestamp: row[0],
+        orderNumber: row[1],
+        customerNumber: row[2],
+        customerName: row[3],
+        warehouse: row[4],
+        deliveryAddress: row[5],
+        itemsText: row[6],
+        depositBags: row[7],
+        depositPallets: row[8],
+      }));
+    }
+    return [];
+  } catch (err) {
+    console.error("❌ שגיאה בשליפת הזמנות:", err);
+    return [];
+  }
+}
