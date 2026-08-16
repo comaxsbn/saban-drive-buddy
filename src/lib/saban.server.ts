@@ -44,7 +44,7 @@ export class SabanServerCore {
   private config: SabanServerConfig = {
     gasUrl:
       (typeof process !== 'undefined' && (process.env.VITE_GAS_URL || process.env.VITE_GAS_URL_GEMINI)) ||
-      'https://script.google.com/macros/s/AKfycbwVciqrPZ57q_XdeUoay1EuP5FTCjvazRsASIz14uJpDh9i7NFVvDEZTlF6rTn1BTNdsQ/exec',
+      'https://script.google.com/macros/s/AKfycbwJDwvb3wPYFoCEVCH_E9Mdco5w_dZeh35KNtCJB8_GdSllt59vV10oWgEA-QaH4S5A/exec',
     spreadsheetId:
       (typeof process !== 'undefined' && process.env.SABAN_SPREADSHEET_ID) ||
       '1dcQ4TfEZzIOvGLqK3arRiVpyU2l6UM7jcvS1QW_b3Lg',
