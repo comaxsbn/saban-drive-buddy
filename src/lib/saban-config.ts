@@ -1,7 +1,7 @@
 export const SHEETS = {
-  orders: "16gvy_W6JHWjcLC7eKA4CKqq_RHQpLeRpkC_Fd1bj5Ps",
-  notes: "15MdpPh1uwknscBSI_I5WALvXY-jvqdpO63b8zw5gi3Y",
-  dashboard: "1NZf_bH4Xl2RfA8AoBk_hFh8nlg3_WQP0BHjA3BQPXUE",
+  orders: "1Ie7gKql_EDdrIN9HqunJc9Ey5k0WXXfPRxs0Vp1Bs2c",
+  notes: "1Ie7gKql_EDdrIN9HqunJc9Ey5k0WXXfPRxs0Vp1Bs2c",
+  dashboard: "1Ie7gKql_EDdrIN9HqunJc9Ey5k0WXXfPRxs0Vp1Bs2c",
 } as const;
 
 export const ORDERS_TAB = "הזמנות";
