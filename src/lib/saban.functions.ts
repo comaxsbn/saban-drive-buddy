@@ -209,6 +209,29 @@ export async function getOrders(forceFresh = false): Promise<Order[]> {
     return [];
   }
 }
+// ============================================================================
+// 5. שירותי נועה AI (Noa AI Assistant Named Exports)
+// ============================================================================
+
+export async function askNoa(prompt: string): Promise<string> {
+  try {
+    const response = await fetch(`${(sabanServer as any)['config']?.gasUrl || ''}?action=askNoa`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt }),
+    });
+    
+    if (!response.ok) {
+      return "נועה AI זכרת כרגע, נסה שוב שנית.";
+    }
+    
+    const data = await response.json();
+    return data.reply || data.answer || "קיבלתי את הודעתך, מעבד את הנתונים.";
+  } catch (e) {
+    console.error('askNoa error:', e);
+    return "שגיאה בתקשורת מול נועה AI.";
+  }
+}
 
 export async function createOrder(orderData: Partial<Order>): Promise<Order> {
   const orderNumber = safeString(orderData.orderNumber, `ORD-${Date.now().toString().slice(-6)}`);
