@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
-import { Menu, LayoutDashboard, FileText, PackageSearch, Users, Sparkles } from "lucide-react";
+import { Menu, LayoutDashboard, FileText, PackageSearch, Users, Sparkles, Truck } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -9,6 +9,7 @@ const NAV = [
   { to: "/", label: "לוח מחוונים", icon: LayoutDashboard },
   { to: "/notes", label: "תעודות", icon: FileText },
   { to: "/orders", label: "הזמנות", icon: PackageSearch },
+  { to: "/dispatch", label: "סידור", icon: Truck },
   { to: "/customers", label: "תיקי לקוחות", icon: Users },
   { to: "/chat", label: "צ'אט נועה", icon: Sparkles },
 ] as const;
