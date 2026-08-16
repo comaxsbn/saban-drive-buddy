@@ -64,7 +64,10 @@ function DispatchPage() {
   );
 
   const sendBrief = () => {
-    if (!list.length) return toast.error("אין הזמנות פתוחות לדוח");
+    if (!list.length) {
+      toast.error("אין הזמנות פתוחות לדוח");
+      return;
+    }
     const text = buildMorningBrief(list.map((o) => ({ order: o, meta: get(o) })));
     window.open(whatsappUrl(text), "_blank", "noopener");
   };
