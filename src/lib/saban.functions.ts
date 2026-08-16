@@ -138,7 +138,7 @@ export async function getOrders(forceFresh = false): Promise<Order[]> {
       const isNineColumnFormat = r.length <= 10;
 
       const rawDateTime = safeString(r[0], new Date().toLocaleDateString('he-IL'));
-      const orderNumber = safeString(r, `ORD-${idx + 1}`);
+      const orderNumber = safeString(r[1], `ORD-${idx + 1}`);
       const customerName = safeString(r[2], 'לקוח כללי');
 
       let warehouse = '4(החרש)';
@@ -174,7 +174,7 @@ export async function getOrders(forceFresh = false): Promise<Order[]> {
       }
 
       const datePart = rawDateTime.includes(' ') ? rawDateTime.split(' ')[0] : rawDateTime;
-      const timePart = rawDateTime.includes(' ') ? rawDateTime.split(' ') : '';
+      const timePart = rawDateTime.includes(' ') ? rawDateTime.split(' ')[1] : '';
 
       return {
         id: `ord_${orderNumber}_${idx}`,
@@ -221,7 +221,7 @@ export async function createOrder(orderData: Partial<Order>): Promise<Order> {
     orderNumber,
     dateTime,
     date: dateTime.split(' ')[0] || '',
-    time: dateTime.split(' ') || '',
+    time: dateTime.split(' ')[1] || '',
     customerName: safeString(orderData.customerName, 'לקוח כללי'),
     customerPhone: safeString(orderData.customerPhone, ''),
     warehouse: safeString(orderData.warehouse, '4(החרש)'),
@@ -316,7 +316,7 @@ export async function getNotes(forceFresh = false): Promise<DeliveryNote[]> {
 
     const rows = raw.slice(1);
     return rows.map((r, idx) => {
-      const docNum = safeString(r, `NOTE-${idx + 1}`);
+      const docNum = safeString(r[1], `NOTE-${idx + 1}`);
       const driver = safeString(r[4], 'חכמת/עלי');
       const items = safeString(r[5], '');
       const status = safeString(r[6], 'נמסר');
@@ -419,7 +419,7 @@ export async function touchCustomer(name: string, phone: string, address: string
       const totalOrders = safeNumber(existing[5], 0) + 1;
       const updatedRow = [
         safeString(existing[0]),
-        safeString(existing, name),
+        safeString(existing[1], name),
         phone,
         safeString(existing[3], name),
         safeString(address, safeString(existing[4])),
@@ -435,10 +435,12 @@ export async function touchCustomer(name: string, phone: string, address: string
       );
     } else {
       const newId = `CUST-${cleanPhone.slice(-4) || 'SBN'}`;
-      const newRow =;
+      const newRow = [newId, name, phone, name, address, 1, new Date().toLocaleDateString('he-IL'), 'פעיל'];
       await sabanServer.appendRowQueued(SABAN_SHEET_NAMES.CUSTOMERS, newRow);
     }
-  } catch (e) {}
+  } catch (e) {
+    console.error('touchCustomer error:', e);
+  }
 }
 
 export async function createCustomer(customerData: Partial<Customer>): Promise<Customer> {
@@ -447,8 +449,9 @@ export async function createCustomer(customerData: Partial<Customer>): Promise<C
   const address = safeString(customerData.address);
   const customerNumber = safeString(customerData.customerNumber, `CUST-${phone.slice(-4) || 'NEW'}`);
 
-  const row =;
-  await sabanServer.appendRowQueued(SABAN_SHEET_NAMES.CUSTOMERS, row);
+  const newRow = [customerNumber, name, phone, name, address, 1, new Date().toLocaleDateString('he-IL'), 'פעיל'];
+  await sabanServer.appendRowQueued(SABAN_SHEET_NAMES.CUSTOMERS, newRow);
+
   return {
     id: `cust_${customerNumber}`,
     customerNumber,
@@ -471,8 +474,22 @@ export async function updateCustomer(customerId: string, updates: Partial<Custom
     if (existing) {
       const updatedRow = [
         safeString(existing[0]),
-        safeString(updates.name, safeString(existing)),
+        safeString(updates.name, safeString(existing[1])),
         safeString(updates.phone, safeString(existing[2])),
         safeString(updates.contactPerson, safeString(existing[3])),
         safeString(updates.address, safeString(existing[4])),
-        safeNumber(existing
+        safeNumber(existing[5], 1),
+        safeString(existing[6]),
+        'פעיל',
+      ];
+      await sabanServer.updateRowByIdentifierQueued(
+        SABAN_SHEET_NAMES.CUSTOMERS,
+        'מזהה לקוח',
+        customerId,
+        updatedRow
+      );
+    }
+  } catch (e) {
+    console.error('updateCustomer error:', e);
+  }
+}
