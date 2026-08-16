@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ChatRouteImport } from './routes/chat'
 import { Route as CustomersRouteImport } from './routes/customers'
+import { Route as DispatchRouteImport } from './routes/dispatch'
 import { Route as NotesRouteImport } from './routes/notes'
 import { Route as OrdersRouteImport } from './routes/orders'
 
@@ -30,6 +31,11 @@ const CustomersRoute = CustomersRouteImport.update({
   path: '/customers',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DispatchRoute = DispatchRouteImport.update({
+  id: '/dispatch',
+  path: '/dispatch',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const NotesRoute = NotesRouteImport.update({
   id: '/notes',
   path: '/notes',
@@ -45,6 +51,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/chat': typeof ChatRoute
   '/customers': typeof CustomersRoute
+  '/dispatch': typeof DispatchRoute
   '/notes': typeof NotesRoute
   '/orders': typeof OrdersRoute
 }
@@ -52,6 +59,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/chat': typeof ChatRoute
   '/customers': typeof CustomersRoute
+  '/dispatch': typeof DispatchRoute
   '/notes': typeof NotesRoute
   '/orders': typeof OrdersRoute
 }
@@ -60,21 +68,30 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/chat': typeof ChatRoute
   '/customers': typeof CustomersRoute
+  '/dispatch': typeof DispatchRoute
   '/notes': typeof NotesRoute
   '/orders': typeof OrdersRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/chat' | '/customers' | '/notes' | '/orders'
+  fullPaths: '/' | '/chat' | '/customers' | '/dispatch' | '/notes' | '/orders'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/chat' | '/customers' | '/notes' | '/orders'
-  id: '__root__' | '/' | '/chat' | '/customers' | '/notes' | '/orders'
+  to: '/' | '/chat' | '/customers' | '/dispatch' | '/notes' | '/orders'
+  id:
+    | '__root__'
+    | '/'
+    | '/chat'
+    | '/customers'
+    | '/dispatch'
+    | '/notes'
+    | '/orders'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ChatRoute: typeof ChatRoute
   CustomersRoute: typeof CustomersRoute
+  DispatchRoute: typeof DispatchRoute
   NotesRoute: typeof NotesRoute
   OrdersRoute: typeof OrdersRoute
 }
@@ -102,6 +119,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CustomersRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/dispatch': {
+      id: '/dispatch'
+      path: '/dispatch'
+      fullPath: '/dispatch'
+      preLoaderRoute: typeof DispatchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/notes': {
       id: '/notes'
       path: '/notes'
@@ -123,6 +147,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ChatRoute: ChatRoute,
   CustomersRoute: CustomersRoute,
+  DispatchRoute: DispatchRoute,
   NotesRoute: NotesRoute,
   OrdersRoute: OrdersRoute,
 }
